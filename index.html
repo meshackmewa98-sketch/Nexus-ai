@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus AI & Design Hub</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            nexus: {
+              50: '#f5f3ff',
+              100: '#ede9fe',
+              500: '#8b5cf6',
+              600: '#7c3aed',
+              700: '#6d28d9',
+              900: '#4c1d95',
+              950: '#0f0b1e'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    /* Custom scrollbar & canvas styles */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+    .canvas-grid {
+      background-size: 20px 20px;
+      background-image: radial-gradient(circle, #3f3f46 1px, transparent 1px);
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 font-sans antialiased h-screen overflow-hidden">
+
+  <div id="app" class="h-full w-full flex"></div>
+
+  <script>
+    // =========================================================================
+    // GLOBAL STATE ENGINE
+    // =========================================================================
+    const DB = {
+      getUser: () => JSON.parse(localStorage.getItem('nexus_user') || 'null'),
+      setUser: (u) => localStorage.setItem('nexus_user', JSON.stringify(u)),
+      getApiKey: () => localStorage.getItem('gemini_api_key') || '',
+      setApiKey: (k) => localStorage.setItem('gemini_api_key', k),
+      getChats: () => JSON.parse(localStorage.getItem('nexus_chats') || '[]'),
+      setChats: (c) => localStorage.setItem('nexus_chats', JSON.stringify(c)),
+      getProjects: () => JSON.parse(localStorage.getItem('nexus_projects') || '[]'),
+      setProjects: (p) => localStorage.setItem('nexus_projects', JSON.stringify(p)),
+      getBrand: () => JSON.parse(localStorage.getItem('nexus_brand') || '{"primary":"#7c3aed","secondary":"#ec4899","font":"Inter","logo":""}'),
+      setBrand: (b) => localStorage.setItem('nexus_brand', JSON.stringify(b))
+    };
+
+    // Initialize Default Demo Data if Empty
+    if (DB.getChats().length === 0) {
+      DB.setChats([{
+        id: '1',
+        title: 'New AI Conversation',
+        messages: [{ sender: 'ai', text: 'Welcome to Nexus AI! Ask questions or click Canva in the sidebar to open the Design Hub.', model: 'Nexus Core' }],
+        updatedAt: Date.now()
+      }]);
+    }
+
+    if (DB.getProjects().length === 0) {
+      DB.setProjects([
+        { id: 'p1', name: 'Volcanicity Grade 10 Slides', type: 'presentation', updatedAt: Date.now() - 3600000, data: { slides: [{ title: 'Volcanoes Overview', content: 'Magma chambers and plate boundary movements.' }] } },
+        { id: 'p2', name: 'Instagram Product Launch', type: 'social', updatedAt: Date.now() - 86400000, data: { width: 1080, height: 1080, elements: [] } },
+        { id: 'p3', name: 'Q3 Financial Sheet', type: 'spreadsheet', updatedAt: Date.now() - 172800000, data: { grid: [['Month', 'Revenue'], ['Jan', '10000'], ['Feb', '15000'], ['Total', '=SUM(B2:B3)']] } }
+      ]);
+    }
+
+    let state = {
+      user: DB.getUser(),
+      currentRoute: 'dashboard', // routes: dashboard, chat, projects, tools, canva, learning, settings, design/*
+      designSubRoute: 'home',    // home, templates, presentation, social, video, doc, whiteboard, spreadsheet, code, projects, brand, ai, editor
+      activeProject: null,
+      activeChatId: DB.getChats()[0]?.id || '1',
+      chats: DB.getChats(),
+      projects: DB.getProjects(),
+      brand: DB.getBrand(),
+      apiKey: DB.getApiKey(),
+      theme: 'dark',
+      isSettingsOpen: false,
+      isVoiceActive: false,
+      inputText: '',
+      isLoading: false,
+      searchQuery: '',
+      editorElements: [],
+      selectedElementId: null,
+      editorHistory: [],
+      historyIndex: -1,
+      // Workspace states
+      presentationSlides: [{ id: 1, text: 'Slide Title', bg: '#18181b' }],
+      currentSlideIdx: 0,
+      whiteboardPaths: [],
+      spreadsheetData: [['A1', 'B1', 'C1'], ['10', '20', '=SUM(A2:B2)']],
+      codeSnippet: `// Live JavaScript Preview\nconsole.log("Welcome to Nexus Code Workspace!");\ndocument.body.innerHTML = "<h1 style='color: #7c3aed; font-family: sans-serif; text-align: center; margin-top: 20%;'>Nexus Live Code Engine Working!</h1>";`,
+      aiDesignPrompt: '',
+      aiDesignPlan: null
+    };
+
+    // Global navigation router
+    function navigate(route, subRoute = 'home', projectData = null) {
+      state.currentRoute = route;
+      if (route === 'canva') {
+        state.designSubRoute = subRoute;
+        if (projectData) {
+          state.activeProject = projectData;
+          if (projectData.type === 'presentation' && projectData.data?.slides) {
+            state.presentationSlides = projectData.data.slides;
+          }
+          if (projectData.type === 'spreadsheet' && projectData.data?.grid) {
+            state.spreadsheetData = projectData.data.grid;
+          }
+        }
+      }
+      render();
+    }
+
+    // --- TEMPLATES LIBRARY ---
+    const TEMPLATES = [
+      { id: 't1', name: 'Corporate Quarterly Deck', category: 'Presentations', type: 'presentation', tags: ['business', 'slide', 'presentation'] },
+      { id: 't2', name: 'Instagram Tech Promo', category: 'Social Media', type: 'social', tags: ['social', 'instagram', 'post'] },
+      { id: 't3', name: 'High School Geography Lesson', category: 'Education', type: 'presentation', tags: ['school', 'education', 'presentation'] },
+      { id: 't4', name: 'Startup Business Plan Doc', category: 'Reports', type: 'doc', tags: ['doc', 'business', 'report'] },
+      { id: 't5', name: 'Agile Brainstorming Board', category: 'Whiteboard', type: 'whiteboard', tags: ['whiteboard', 'brainstorm'] },
+      { id: 't6', name: 'Monthly Budget Sheet', category: 'Spreadsheets', type: 'spreadsheet', tags: ['spreadsheet', 'finance'] },
+      { id: 't7', name: 'React Dashboard Code', category: 'Code', type: 'code', tags: ['code', 'javascript', 'html'] }
+    ];
+
+    // --- AI ENGINE (GEMINI INTEGRATION) ---
+    async function queryAI(prompt) {
+      if (!state.apiKey) {
+        return "Please open Settings ⚙️ and paste your free Google Gemini API key to enable real AI generation.";
+      }
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${state.apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await res.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || "Unable to retrieve AI response.";
+      } catch (e) {
+        return "Error connecting to AI service. Check your API key.";
+      }
+    }
+
+    // --- SPREADSHEET FORMULA EVALUATOR ---
+    function evaluateCell(cellValue, grid) {
+      if (!cellValue || !cellValue.toString().startsWith('=')) return cellValue;
+      const formula = cellValue.substring(1).toUpperCase();
+      try {
+        if (formula.startsWith('SUM(')) {
+          const range = formula.replace('SUM(', '').replace(')', '').split(':');
+          if (range.length === 2) {
+            let sum = 0;
+            // Basic range parse e.g. A2:B2
+            const startCol = range[0].charCodeAt(0) - 65;
+            const startRow = parseInt(range[0].substring(1)) - 1;
+            const endCol = range[1].charCodeAt(0) - 65;
+            const endRow = parseInt(range[1].substring(1)) - 1;
+
+            for (let r = startRow; r <= endRow; r++) {
+              for (let c = startCol; c <= endCol; c++) {
+                if (grid[r] && grid[r][c]) sum += parseFloat(grid[r][c]) || 0;
+              }
+            }
+            return sum;
+          }
+        }
+        return eval(formula.toLowerCase());
+      } catch (e) {
+        return '#ERROR!';
+      }
+    }
+
+    // =========================================================================
+    // UI RENDERERS
+    // =========================================================================
+
+    function render() {
+      const app = document.getElementById('app');
+
+      // AUTH GATE
+      if (!state.user) {
+        app.innerHTML = `
+          <div class="h-screen w-full flex items-center justify-center bg-zinc-950 text-white p-4">
+            <div class="max-w-md w-full p-8 rounded-3xl bg-zinc-900 border border-zinc-800 text-center space-y-6 shadow-2xl">
+              <div class="inline-flex p-4 rounded-2xl bg-nexus-500/10 text-nexus-500 mb-2">
+                <i data-lucide="sparkles" class="w-10 h-10"></i>
+              </div>
+              <h1 class="text-3xl font-extrabold tracking-tight">Nexus AI Suite</h1>
+              <p class="text-zinc-400 text-sm">Unified AI Workspace & Nexus Design Hub</p>
+
+              <div class="space-y-3 pt-4">
+                <button onclick="login('Google')" class="w-full flex items-center justify-center gap-3 p-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 transition font-medium text-sm border border-zinc-700">
+                  <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+                  Continue with Google
+                </button>
+                <button onclick="login('GitHub')" class="w-full flex items-center justify-center gap-3 p-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 transition font-medium text-sm border border-zinc-700">
+                  <i data-lucide="github" class="w-5 h-5"></i> Continue with GitHub
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      // APP LAYOUT WITH PERMANENT SIDEBAR
+      app.innerHTML = `
+        <div class="flex h-screen w-full bg-zinc-950 text-zinc-100">
+          <!-- MAIN NEXUS SIDEBAR -->
+          <aside class="w-64 border-r border-zinc-800 bg-zinc-900/80 backdrop-blur-md flex flex-col justify-between p-3 shrink-0">
+            <div>
+              <div class="flex items-center gap-2 px-3 py-2 mb-4 text-nexus-500 font-bold text-xl tracking-wider">
+                <i data-lucide="cpu" class="w-6 h-6"></i> NEXUS AI
+              </div>
+
+              <nav class="space-y-1 text-sm font-medium">
+                <button onclick="navigate('dashboard')" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition ${state.currentRoute === 'dashboard' ? 'bg-nexus-600 text-white shadow-lg shadow-nexus-600/30' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}">
+                  <i data-lucide="home" class="w-4 h-4"></i> Dashboard
+                </button>
+                <button onclick="navigate('chat')" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition ${state.currentRoute === 'chat' ? 'bg-nexus-600 text-white shadow-lg shadow-nexus-600/30' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}">
+                  <i data-lucide="message-square" class="w-4 h-4"></i> AI Chat
+                </button>
+                <button onclick="navigate('projects')" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition ${state.currentRoute === 'projects' ? 'bg-nexus-600 text-white shadow-lg shadow-nexus-600/30' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}">
+                  <i data-lucide="folder" class="w-4 h-4"></i> Projects
+                </button>
+                <button onclick="navigate('tools')" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition ${state.currentRoute === 'tools' ? 'bg-nexus-600 text-white shadow-lg shadow-nexus-600/30' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}">
+                  <i data-lucide="sparkles" class="w-4 h-4"></i> AI Tools
+                </button>
+                
+                <!-- REQUIRED PERMANENT CANVA BUTTON -->
+                <button onclick="navigate('canva', 'home')" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition ${state.currentRoute === 'canva' ? 'bg-gradient-to-r from-nexus-600 to-pink-600 text-white shadow-lg shadow-nexus-600/30 font-semibold' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'}">
+                  <div class="flex items-center gap-3">
+                    <i data-lucide="palette" class="w-4 h-4 text-pink-400"></i> Canva
+                  </div>
+                  <span class="text-[10px] bg-pink-500/20 text-pink-300 border border-pink-500/30 px-1.5 py-0.5 rounded-full font-mono">HUB</span>
+                </button>
+
+                <button onclick="navigate('learning')" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition ${state.currentRoute === 'learning' ? 'bg-nexus-600 text-white shadow-lg shadow-nexus-600/30' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}">
+                  <i data-lucide="book-open" class="w-4 h-4"></i> Learning
+                </button>
+                <button onclick="state.isSettingsOpen = true; render();" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition text-zinc-400 hover:bg-zinc-800 hover:text-white">
+                  <i data-lucide="settings" class="w-4 h-4"></i> Settings
+                </button>
+              </nav>
+            </div>
+
+            <div class="border-t border-zinc-800 pt-3">
+              <div class="flex items-center justify-between p-2 rounded-xl bg-zinc-800/50">
+                <div class="flex items-center gap-2">
+                  <img src="${state.user.avatar}" class="w-7 h-7 rounded-full" />
+                  <div class="text-xs font-semibold truncate max-w-[100px]">${state.user.name}</div>
+                </div>
+                <button onclick="logout()" title="Log out" class="text-zinc-400 hover:text-red-400"><i data-lucide="log-out" class="w-4 h-4"></i></button>
+              </div>
+            </div>
+          </aside>
+
+          <!-- MAIN WORKSPACE VIEWPORT -->
+          <main class="flex-1 flex flex-col overflow-hidden bg-zinc-950">
+            ${renderRouteContent()}
+          </main>
+        </div>
+
+        <!-- SETTINGS MODAL -->
+        ${state.isSettingsOpen ? renderSettingsModal() : ''}
+      `;
+
+      lucide.createIcons();
+      attachCanvasListeners();
+    }
+
+    // --- ROUTE SWITCHER ---
+    function renderRouteContent() {
+      if (state.currentRoute === 'canva') {
+        return renderNexusDesignHub();
+      }
+      if (state.currentRoute === 'chat') {
+        return renderAIChatView();
+      }
+      if (state.currentRoute === 'projects') {
+        return renderProjectsList();
+      }
+      if (state.currentRoute === 'tools') {
+        return `<div class="p-8 text-center text-zinc-400"><h2 class="text-2xl font-bold text-white mb-2">Nexus AI Tools</h2><p>Integrated tools are active inside AI Chat and Design Hub.</p></div>`;
+      }
+      if (state.currentRoute === 'learning') {
+        return `<div class="p-8 text-center text-zinc-400"><h2 class="text-2xl font-bold text-white mb-2">Nexus Learning Portal</h2><p>Interactive guides and prompts available.</p></div>`;
+      }
+
+      // Default Dashboard
+      return `
+        <div class="p-8 overflow-y-auto space-y-6">
+          <div class="flex justify-between items-center">
+            <div>
+              <h1 class="text-3xl font-extrabold text-white">Welcome back, ${state.user.name} 👋</h1>
+              <p class="text-zinc-400 text-sm mt-1">Nexus AI Core Workspace & Creative Studio</p>
+            </div>
+            <button onclick="navigate('canva', 'home')" class="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-nexus-600 to-pink-600 text-white font-bold shadow-lg shadow-nexus-600/20 hover:opacity-95 transition">
+              <i data-lucide="palette" class="w-4 h-4"></i> Open Nexus Design Hub
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div onclick="navigate('canva', 'presentation')" class="p-5 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-nexus-500/50 cursor-pointer transition space-y-3">
+              <div class="p-3 bg-nexus-500/10 text-nexus-400 rounded-xl w-fit"><i data-lucide="presentation" class="w-6 h-6"></i></div>
+              <h3 class="font-bold text-lg text-white">Presentation Engine</h3>
+              <p class="text-xs text-zinc-400">Build slide decks with automated AI outline support.</p>
+            </div>
+            <div onclick="navigate('canva', 'spreadsheet')" class="p-5 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-nexus-500/50 cursor-pointer transition space-y-3">
+              <div class="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl w-fit"><i data-lucide="table" class="w-6 h-6"></i></div>
+              <h3 class="font-bold text-lg text-white">Nexus Spreadsheets</h3>
+              <p class="text-xs text-zinc-400">Perform calculations with SUM, MAX, MIN formula evaluation.</p>
+            </div>
+            <div onclick="navigate('canva', 'code')" class="p-5 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-nexus-500/50 cursor-pointer transition space-y-3">
+              <div class="p-3 bg-blue-500/10 text-blue-400 rounded-xl w-fit"><i data-lucide="code" class="w-6 h-6"></i></div>
+              <h3 class="font-bold text-lg text-white">Live Code Workspace</h3>
+              <p class="text-xs text-zinc-400">Write JavaScript, HTML, CSS with live browser execution.</p>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // 2. NEXUS DESIGN HUB (CANVA-STYLE WORKSPACE)
+    // =========================================================================
+    function renderNexusDesignHub() {
+      return `
+        <div class="flex h-full w-full overflow-hidden">
+          <!-- SUB SIDEBAR (LEFT DESIGN-HUB SIDEBAR) -->
+          <aside class="w-56 border-r border-zinc-800 bg-zinc-900/50 flex flex-col justify-between p-3 shrink-0">
+            <div class="space-y-4">
+              <!-- CREATE BUTTON -->
+              <div class="relative group">
+                <button class="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-nexus-600 hover:bg-nexus-500 text-white font-bold text-sm shadow-lg shadow-nexus-600/30 transition">
+                  <i data-lucide="plus" class="w-4 h-4"></i> Create Design
+                </button>
+                <div class="hidden group-hover:block absolute top-full left-0 w-full mt-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-2 shadow-2xl z-50 space-y-1">
+                  <button onclick="createNewProject('presentation')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Presentation</button>
+                  <button onclick="createNewProject('social')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Social Media Post</button>
+                  <button onclick="createNewProject('video')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Video Studio</button>
+                  <button onclick="createNewProject('doc')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Document</button>
+                  <button onclick="createNewProject('whiteboard')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Whiteboard</button>
+                  <button onclick="createNewProject('spreadsheet')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Spreadsheet</button>
+                  <button onclick="createNewProject('code')" class="w-full text-left p-2 rounded-lg hover:bg-zinc-800 text-xs text-zinc-200">Code Project</button>
+                </div>
+              </div>
+
+              <!-- NAV LINKS -->
+              <nav class="space-y-1 text-xs font-semibold text-zinc-400">
+                <button onclick="navigate('canva', 'home')" class="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-zinc-800 hover:text-white ${state.designSubRoute === 'home' ? 'text-nexus-400 bg-zinc-800' : ''}"><i data-lucide="home" class="w-4 h-4"></i> Home</button>
+                <button onclick="navigate('canva', 'projects')" class="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-zinc-800 hover:text-white ${state.designSubRoute === 'projects' ? 'text-nexus-400 bg-zinc-800' : ''}"><i data-lucide="folder" class="w-4 h-4"></i> Projects</button>
+                <button onclick="navigate('canva', 'templates')" class="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-zinc-800 hover:text-white ${state.designSubRoute === 'templates' ? 'text-nexus-400 bg-zinc-800' : ''}"><i data-lucide="layout-grid" class="w-4 h-4"></i> Templates</button>
+                <button onclick="navigate('canva', 'brand')" class="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-zinc-800 hover:text-white ${state.designSubRoute === 'brand' ? 'text-nexus-400 bg-zinc-800' : ''}"><i data-lucide="palette" class="w-4 h-4"></i> Brand Kit</button>
+                <button onclick="navigate('canva', 'ai')" class="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-zinc-800 hover:text-white ${state.designSubRoute === 'ai' ? 'text-nexus-400 bg-zinc-800' : ''}"><i data-lucide="bot" class="w-4 h-4"></i> Nexus AI Designer</button>
+              </nav>
+            </div>
+          </aside>
+
+          <!-- MAIN DESIGN HUB CONTENT AREA -->
+          <div class="flex-1 flex flex-col overflow-y-auto">
+            ${renderDesignHubSubRoute()}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDesignHubSubRoute() {
+      // 1. DESIGN HUB HOME
+      if (state.designSubRoute === 'home') {
+        const filteredTemplates = TEMPLATES.filter(t => 
+          !state.searchQuery || t.name.toLowerCase().includes(state.searchQuery.toLowerCase()) || t.tags.some(tag => tag.includes(state.searchQuery.toLowerCase()))
+        );
+
+        return `
+          <div class="p-8 space-y-8">
+            <div class="text-center max-w-2xl mx-auto space-y-4">
+              <h1 class="text-4xl font-extrabold tracking-tight text-white">NEXUS DESIGN HUB</h1>
+              <p class="text-zinc-400 text-lg">What will you design today?</p>
+              
+              <!-- SEARCH -->
+              <div class="relative">
+                <i data-lucide="search" class="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400"></i>
+                <input 
+                  type="text" 
+                  value="${state.searchQuery}"
+                  oninput="state.searchQuery = this.value; render();"
+                  placeholder="Search templates, presentations, documents, spreadsheets..." 
+                  class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-zinc-900 border border-zinc-800 text-sm focus:outline-none focus:border-nexus-500 text-white shadow-xl"
+                />
+              </div>
+
+              <!-- CATEGORY BUTTONS -->
+              <div class="flex flex-wrap items-center justify-center gap-2 pt-2">
+                <button onclick="navigate('canva', 'templates')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Templates</button>
+                <button onclick="navigate('canva', 'presentation')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Presentation</button>
+                <button onclick="navigate('canva', 'social')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Social Media</button>
+                <button onclick="navigate('canva', 'video')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Video</button>
+                <button onclick="navigate('canva', 'doc')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Doc</button>
+                <button onclick="navigate('canva', 'whiteboard')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Whiteboard</button>
+                <button onclick="navigate('canva', 'spreadsheet')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Spreadsheet</button>
+                <button onclick="navigate('canva', 'code')" class="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-nexus-600 border border-zinc-800 text-xs font-semibold transition">Code</button>
+              </div>
+            </div>
+
+            <!-- RECENT PROJECTS -->
+            <div class="space-y-4">
+              <h3 class="text-xl font-bold text-white flex items-center gap-2"><i data-lucide="clock" class="w-5 h-5 text-nexus-500"></i> Recent Designs</h3>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                ${state.projects.map(p => `
+                  <div class="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 flex justify-between items-center group">
+                    <div>
+                      <div class="font-bold text-white text-sm">${p.name}</div>
+                      <div class="text-[10px] text-zinc-500 uppercase font-mono mt-1">${p.type}</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button onclick="openProject('${p.id}')" class="px-3 py-1.5 rounded-lg bg-nexus-600 text-xs font-semibold">Open</button>
+                      <button onclick="deleteProject('${p.id}')" class="p-1.5 rounded-lg text-zinc-500 hover:text-red-400"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <!-- SEARCHED / FEATURED TEMPLATES -->
+            <div class="space-y-4">
+              <h3 class="text-xl font-bold text-white">Recommended Templates</h3>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                ${filteredTemplates.map(t => `
+                  <div class="p-5 rounded-2xl bg-zinc-900 border border-zinc-800 flex flex-col justify-between space-y-4">
+                    <div>
+                      <span class="text-[10px] bg-nexus-500/20 text-nexus-300 px-2 py-0.5 rounded-full font-mono">${t.category}</span>
+                      <h4 class="font-bold text-white text-base mt-2">${t.name}</h4>
+                    </div>
+                    <button onclick="useTemplate('${t.id}')" class="w-full py-2 rounded-xl bg-zinc-800 hover:bg-nexus-600 text-xs font-semibold transition">Use Template</button>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 2. PRESENTATION WORKSPACE
+      if (state.designSubRoute === 'presentation') {
+        const slide = state.presentationSlides[state.currentSlideIdx] || state.presentationSlides[0];
+        return `
+          <div class="flex h-full w-full">
+            <!-- SLIDE THUMBNAILS -->
+            <div class="w-48 border-r border-zinc-800 p-3 space-y-3 bg-zinc-900/40">
+              <button onclick="addSlide()" class="w-full py-2 rounded-xl bg-nexus-600 text-xs font-bold flex items-center justify-center gap-1"><i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Slide</button>
+              <div class="space-y-2 overflow-y-auto max-h-[calc(100vh-160px)]">
+                ${state.presentationSlides.map((s, idx) => `
+                  <div onclick="state.currentSlideIdx = ${idx}; render();" class="p-3 rounded-xl border ${state.currentSlideIdx === idx ? 'border-nexus-500 bg-zinc-800' : 'border-zinc-800'} cursor-pointer text-xs space-y-1">
+                    <div class="font-bold text-zinc-300">Slide ${idx + 1}</div>
+                    <div class="text-[10px] text-zinc-500 truncate">${s.text}</div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <!-- MAIN CANVAS -->
+            <div class="flex-1 flex flex-col justify-between p-6 bg-zinc-950 canvas-grid">
+              <div class="flex justify-between items-center bg-zinc-900 p-3 rounded-2xl border border-zinc-800">
+                <span class="text-sm font-bold">Presentation Editor</span>
+                <div class="flex gap-2">
+                  <button onclick="addSlide()" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs">Duplicate</button>
+                  <button onclick="deleteSlide()" class="px-3 py-1.5 rounded-lg bg-red-600/20 text-red-400 text-xs">Delete</button>
+                  <button onclick="saveCurrentProject('presentation')" class="px-4 py-1.5 rounded-lg bg-nexus-600 text-xs font-bold">Save Deck</button>
+                </div>
+              </div>
+
+              <div class="max-w-2xl w-full mx-auto h-80 rounded-2xl border border-zinc-800 flex items-center justify-center p-8 text-center shadow-2xl transition" style="background-color: ${slide.bg}">
+                <textarea 
+                  oninput="state.presentationSlides[state.currentSlideIdx].text = this.value; render();"
+                  class="w-full bg-transparent text-center font-extrabold text-2xl text-white focus:outline-none resize-none"
+                >${slide.text}</textarea>
+              </div>
+
+              <div class="text-center text-xs text-zinc-500">Edit content directly inside the presentation slide canvas.</div>
+            </div>
+          </div>
+        `;
+      }
+
+      // 3. SPREADSHEET WORKSPACE
+      if (state.designSubRoute === 'spreadsheet') {
+        return `
+          <div class="p-6 flex flex-col h-full space-y-4">
+            <div class="flex justify-between items-center">
+              <h2 class="text-xl font-bold text-white flex items-center gap-2"><i data-lucide="table" class="w-5 h-5 text-emerald-400"></i> Nexus Spreadsheets</h2>
+              <button onclick="saveCurrentProject('spreadsheet')" class="px-4 py-2 rounded-xl bg-nexus-600 text-xs font-bold">Save Sheet</button>
+            </div>
+
+            <div class="flex-1 overflow-auto border border-zinc-800 rounded-2xl bg-zinc-900">
+              <table class="w-full border-collapse text-xs">
+                <thead>
+                  <tr class="bg-zinc-800 text-zinc-400">
+                    <th class="p-2 border border-zinc-700 w-12">#</th>
+                    <th class="p-2 border border-zinc-700">A</th>
+                    <th class="p-2 border border-zinc-700">B</th>
+                    <th class="p-2 border border-zinc-700">C</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${state.spreadsheetData.map((row, rIdx) => `
+                    <tr>
+                      <td class="p-2 border border-zinc-800 bg-zinc-800/50 text-center text-zinc-500 font-bold">${rIdx + 1}</td>${row.map((cell, cIdx) => `
+                        <td class="p-0 border border-zinc-800">
+                          <input 
+                            type="text" 
+                            value="${cell}" 
+                            onblur="state.spreadsheetData[${rIdx}][${cIdx}] = this.value; render();"
+                            class="w-full p-2 bg-transparent focus:bg-zinc-800 focus:outline-none text-white"
+                          />
+                        </td>
+                      `).join('')}
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+            <div class="text-xs text-zinc-500 font-mono">Supports formulas like =SUM(A1:B1), =SUM(A2:B2). Click off cell to evaluate.</div>
+          </div>
+        `;
+      }
+
+      // 4. WHITEBOARD WORKSPACE
+      if (state.designSubRoute === 'whiteboard') {
+        return `
+          <div class="p-6 flex flex-col h-full space-y-4">
+            <div class="flex justify-between items-center">
+              <h2 class="text-xl font-bold text-white flex items-center gap-2"><i data-lucide="pen-tool" class="w-5 h-5 text-pink-400"></i> Interactive Whiteboard</h2>
+              <button onclick="clearCanvas()" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs">Clear Board</button>
+            </div>
+            <div class="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900 relative overflow-hidden">
+              <canvas id="whiteboardCanvas" class="w-full h-full cursor-crosshair"></canvas>
+            </div>
+          </div>
+        `;
+      }
+
+      // 5. CODE WORKSPACE
+      if (state.designSubRoute === 'code') {
+        return `
+          <div class="p-6 flex flex-col h-full space-y-4">
+            <div class="flex justify-between items-center">
+              <h2 class="text-xl font-bold text-white flex items-center gap-2"><i data-lucide="code" class="w-5 h-5 text-blue-400"></i> Live Code Workspace</h2>
+              <button onclick="runCode()" class="px-4 py-2 rounded-xl bg-nexus-600 text-xs font-bold flex items-center gap-1"><i data-lucide="play" class="w-3.5 h-3.5"></i> Run Code</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1">
+              <textarea id="codeEditor" class="w-full h-full p-4 rounded-2xl bg-zinc-900 border border-zinc-800 font-mono text-xs text-emerald-400 focus:outline-none resize-none">${state.codeSnippet}</textarea>
+              <iframe id="codePreview" class="w-full h-full rounded-2xl bg-white border border-zinc-800"></iframe>
+            </div>
+          </div>
+        `;
+      }
+
+      // 6. NEXUS AI DESIGNER PANEL
+      if (state.designSubRoute === 'ai') {
+        return `
+          <div class="p-8 max-w-2xl mx-auto space-y-6">
+            <h2 class="text-2xl font-bold text-white flex items-center gap-2"><i data-lucide="bot" class="w-6 h-6 text-nexus-500"></i> Nexus AI Designer Assistant</h2>
+            <p class="text-xs text-zinc-400">Type a design goal (e.g. "Create a Grade 10 geography presentation about volcanicity").</p>
+            
+            <textarea 
+              value="${state.aiDesignPrompt}"
+              oninput="state.aiDesignPrompt = this.value;"
+              placeholder="Describe what you want to design..." 
+              class="w-full p-4 rounded-2xl bg-zinc-900 border border-zinc-800 text-sm focus:outline-none focus:border-nexus-500 text-white h-32 resize-none"
+            ></textarea>
+
+            <button onclick="generateAIDesign()" class="w-full py-3 rounded-xl bg-nexus-600 text-sm font-bold">Generate Design Plan</button>
+
+            ${state.aiDesignPlan ? `
+              <div class="p-5 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3">
+                <h4 class="font-bold text-nexus-400 text-sm">Generated Design Plan</h4>
+                <p class="text-xs text-zinc-300 whitespace-pre-wrap">${state.aiDesignPlan}</p>
+                <button onclick="applyAIDesign()" class="px-4 py-2 rounded-xl bg-emerald-600 text-xs font-bold">Apply to Workspace</button>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+
+      // Fallback
+      return `<div class="p-8 text-zinc-400">Workspace view initialized. Select a tool from the left menu.</div>`;
+    }
+
+    // =========================================================================
+    // 3. AI CHAT VIEW ENGINE
+    // =========================================================================
+    function renderAIChatView() {
+      const activeChat = state.chats.find(c => c.id === state.activeChatId) || state.chats[0];
+
+      return `
+        <div class="flex h-full w-full">
+          <!-- CHAT RECENTS SIDEBAR -->
+          <div class="w-60 border-r border-zinc-800 p-3 bg-zinc-900/30 flex flex-col justify-between">
+            <div>
+              <button onclick="createNewChatSession()" class="w-full py-2.5 px-3 rounded-xl border border-zinc-700 hover:bg-zinc-800 text-xs font-bold flex items-center gap-2 mb-4">
+                <i data-lucide="plus" class="w-4 h-4"></i> New Chat
+              </button>
+              <div class="text-[10px] font-bold text-zinc-500 uppercase px-1 mb-2">Recents (${state.chats.length})</div>
+              <div class="space-y-1 overflow-y-auto max-h-[calc(100vh-200px)]">
+                ${state.chats.map(c => `
+                  <div onclick="state.activeChatId = '${c.id}'; render();" class="p-2 rounded-lg cursor-pointer text-xs truncate ${state.activeChatId === c.id ? 'bg-zinc-800 text-white font-semibold' : 'text-zinc-400 hover:bg-zinc-800/50'}">
+                    ${c.title}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+
+          <!-- CHAT MESSAGES -->
+          <div class="flex-1 flex flex-col justify-between p-6">
+            <div class="flex-1 overflow-y-auto space-y-4 max-w-3xl mx-auto w-full">
+              ${activeChat.messages.map(m => `
+                <div class="flex ${m.sender === 'user' ? 'justify-end' : 'justify-start'}">
+                  <div class="p-4 rounded-2xl max-w-lg text-sm ${m.sender === 'user' ? 'bg-nexus-600 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}">
+                    <p class="whitespace-pre-wrap">${m.text}</p>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <!-- CHAT INPUT -->
+            <div class="max-w-3xl mx-auto w-full pt-4">
+              <div class="flex items-center gap-2 p-2 rounded-2xl border border-zinc-800 bg-zinc-900">
+                <input 
+                  type="text" 
+                  value="${state.inputText}"
+                  oninput="state.inputText = this.value;"
+                  onkeydown="if(event.key === 'Enter') sendChatMessage();"
+                  placeholder="Ask Nexus AI anything..."
+                  class="flex-1 bg-transparent border-none focus:outline-none text-sm text-white px-2"
+                />
+                <button onclick="sendChatMessage()" class="p-2 bg-white text-black rounded-xl"><i data-lucide="send" class="w-4 h-4"></i></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // HELPER ACTIONS & EVENT HANDLERS
+    // =========================================================================
+
+    function login(provider) {
+      state.user = { name: 'Nexus Student', email: 'user@nexus.ai', provider, avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Nexus' };
+      DB.setUser(state.user);
+      render();
+    }
+
+    function logout() {
+      state.user = null;
+      DB.setUser(null);
+      render();
+    }
+
+    function createNewProject(type) {
+      const p = {
+        id: 'p_' + Date.now(),
+        name: `New ${type.toUpperCase()} Design`,
+        type,
+        updatedAt: Date.now(),
+        data: {}
+      };
+      state.projects.unshift(p);
+      DB.setProjects(state.projects);
+      navigate('canva', type, p);
+    }
+
+    function openProject(id) {
+      const p = state.projects.find(proj => proj.id === id);
+      if (p) navigate('canva', p.type, p);
+    }
+
+    function deleteProject(id) {
+      state.projects = state.projects.filter(p => p.id !== id);
+      DB.setProjects(state.projects);
+      render();
+    }
+
+    function useTemplate(id) {
+      const t = TEMPLATES.find(temp => temp.id === id);
+      if (t) createNewProject(t.type);
+    }
+
+    function saveCurrentProject(type) {
+      if (state.activeProject) {
+        state.activeProject.updatedAt = Date.now();
+        if (type === 'presentation') state.activeProject.data.slides = state.presentationSlides;
+        if (type === 'spreadsheet') state.activeProject.data.grid = state.spreadsheetData;
+        DB.setProjects(state.projects);
+        alert("Project saved successfully to Nexus DB.");
+      } else {
+        createNewProject(type);
+      }
+    }
+
+    async function sendChatMessage() {
+      if (!state.inputText.trim()) return;
+      const chat = state.chats.find(c => c.id === state.activeChatId);
+      const text = state.inputText;
+      state.inputText = '';
+      chat.messages.push({ sender: 'user', text });
+      render();
+
+      const reply = await queryAI(text);
+      chat.messages.push({ sender: 'ai', text: reply });
+      DB.setChats(state.chats);
+      render();
+    }
+
+    function createNewChatSession() {
+      const newChat = { id: Date.now().toString(), title: 'New AI Chat', messages: [], updatedAt: Date.now() };
+      state.chats.unshift(newChat);
+      state.activeChatId = newChat.id;
+      DB.setChats(state.chats);
+      render();
+    }
+
+    function addSlide() {
+      state.presentationSlides.push({ id: Date.now(), text: 'New Slide Title', bg: '#18181b' });
+      state.currentSlideIdx = state.presentationSlides.length - 1;
+      render();
+    }
+
+    function deleteSlide() {
+      if (state.presentationSlides.length > 1) {
+        state.presentationSlides.splice(state.currentSlideIdx, 1);
+        state.currentSlideIdx = 0;
+        render();
+      }
+    }
+
+    async function generateAIDesign() {
+      if (!state.aiDesignPrompt) return;
+      state.aiDesignPlan = "Generating layout plan...";
+      render();
+      state.aiDesignPlan = await queryAI(`Generate a design outline for: ${state.aiDesignPrompt}. Provide titles and page breakdown.`);
+      render();
+    }
+
+    function applyAIDesign() {
+      state.presentationSlides = [
+        { id: 1, text: state.aiDesignPrompt, bg: '#4c1d95' },
+        { id: 2, text: 'Slide Outline generated by Nexus AI', bg: '#18181b' }
+      ];
+      navigate('canva', 'presentation');
+    }
+
+    function runCode() {
+      const code = document.getElementById('codeEditor')?.value;
+      const iframe = document.getElementById('codePreview');
+      if (iframe && code) {
+        iframe.srcdoc = `<script>${code}<\/script>`;
+      }
+    }
+
+    function clearCanvas() {
+      const canvas = document.getElementById('whiteboardCanvas');
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    function attachCanvasListeners() {
+      const canvas = document.getElementById('whiteboardCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      let drawing = false;
+
+      canvas.onmousedown = () => drawing = true;
+      canvas.onmouseup = () => { drawing = false; ctx.beginPath(); };
+      canvas.onmousemove = (e) => {
+        if (!drawing) return;
+        const rect = canvas.getBoundingClientRect();
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#8b5cf6';
+        ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+      };
+    }
+
+    function renderSettingsModal() {
+      return `
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div class="p-6 rounded-2xl max-w-md w-full border bg-zinc-900 border-zinc-800 text-white space-y-4">
+            <h2 class="text-lg font-bold">Nexus Settings</h2>
+            <div>
+              <label class="text-xs font-semibold">Google Gemini API Key</label>
+              <input 
+                type="password" 
+                value="${state.apiKey}"
+                onchange="state.apiKey = this.value; DB.setApiKey(this.value);"
+                placeholder="Paste API Key here"
+                class="w-full p-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-xs text-white mt-1"
+              />
+            </div>
+            <button onclick="state.isSettingsOpen = false; render();" class="w-full py-2 bg-nexus-600 text-white rounded-xl font-bold text-xs">Save & Close</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // Initial Launch
+    render();
+  </script>
+</body>
+</html>
